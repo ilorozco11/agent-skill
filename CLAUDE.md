@@ -24,13 +24,82 @@ The project is a **documentation-only repository** - it contains skill definitio
 .github/
 ├── copilot-instructions.md              # Project-wide Copilot instructions
 └── skills/
-    ├── airflow-dag/SKILL.md             # DAG development patterns
-    ├── bigquery/SKILL.md                # Query & feature engineering
+    ├── airflow-dag/
+    │   ├── SKILL.md                     # DAG development patterns
+    │   └── reference/                   # Detailed reference docs
+    │       ├── cost-tracking.md         # Cost optimization patterns
+    │       ├── troubleshooting.md       # Common issues & solutions
+    │       └── dynamic-dags.md          # Advanced DAG generation
+    ├── bigquery/
+    │   ├── SKILL.md                     # Query & feature engineering
+    │   └── reference/
+    │       └── time-series.md           # Time-series features (lag, RFM, seasonality)
     ├── composer/SKILL.md                # GCP Composer deployment
     ├── jenkins-cicd/SKILL.md            # CI/CD pipelines
     ├── pytest-testing/SKILL.md          # Testing data pipelines
-    └── recommendation-ml/SKILL.md       # ML model development
+    └── recommendation-ml/
+        ├── SKILL.md                     # ML model development
+        └── reference/                   # Detailed ML patterns
+            ├── cold-start.md            # New user/product strategies
+            ├── fairness.md              # Diversity & fairness patterns
+            └── bandit-algorithms.md     # Exploration strategies
 ```
+
+**Progressive Disclosure**: Main SKILL.md files contain core patterns (~500-1000 lines) with references to detailed guides for advanced topics.
+
+## Enhanced Skills (Phase 1 Complete)
+
+### Airflow DAG Skill
+**Core Features:**
+- TaskFlow API patterns with best practices
+- Google Cloud operators (BigQuery, GCS)
+- Error handling & retry strategies
+- Cross-DAG dependencies
+
+**New Enhancements:**
+- ✨ **dbt Integration**: DbtCloudRunJobOperator, incremental models, source freshness checks
+- ✨ **Data Lineage**: OpenLineage integration for automatic lineage tracking
+- ✨ **Dynamic DAG Generation**: YAML-based factories, database-driven configs
+
+**Reference Files:** See `reference/` for cost tracking, troubleshooting, and dynamic DAG patterns.
+
+### BigQuery Skill
+**Core Features:**
+- Query optimization (partitioning, clustering, materialized views)
+- Feature engineering (user, product, interaction features)
+- BigQuery ML models (Matrix Factorization, model evaluation)
+
+**New Enhancements:**
+- ✨ **Schema Evolution**: Safe column additions, migration strategies, backward compatibility
+- ✨ **Streaming Patterns**: Storage Write API, exactly-once semantics, error handling
+- ✨ **Cross-Project Queries**: Authorized views, cross-region access, cost attribution
+
+**Reference Files:** See `reference/time-series.md` for RFM features, seasonality encoding, lag/rolling windows.
+
+### Recommendation ML Skill
+**Core Features:**
+- Collaborative filtering, content-based, hybrid recommendations
+- Model evaluation (MAE, RMSE, Precision@K, Recall@K)
+- A/B testing framework
+
+**New Enhancements:**
+- ✨ **Feature Store Integration**: Feast setup, online/offline serving, point-in-time correctness
+- ✨ **Model Registry**: MLflow versioning, champion/challenger deployment, model comparison
+- ✨ **Cold Start Solutions**: Popularity baselines, user segmentation, attribute-based recommendations
+- ✨ **Diversity & Fairness**: MMR algorithm, fairness metrics, demographic parity
+- ✨ **Exploration**: Thompson Sampling, epsilon-greedy, UCB, contextual bandits
+
+**Reference Files:** See `reference/` for comprehensive cold-start, fairness, and bandit patterns.
+
+### Pytest Testing Skill
+**Core Features:**
+- Unit tests for DAG tasks and query logic
+- Integration tests with BigQuery
+- Property-based testing with Hypothesis
+
+**New Enhancements:**
+- ✨ **Data Contract Testing**: JSON schema validation, cross-team contracts, Pydantic schemas
+- ✨ **Visual Regression Testing**: Snapshot testing for data outputs, automated approval workflows
 
 ## Key Architectural Patterns
 

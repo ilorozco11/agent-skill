@@ -1,16 +1,11 @@
 ---
-name: Airflow DAG Development
-description: Support for writing Apache Airflow DAGs for data pipelines in recommendation projects
+name: airflow-dag
+description: Apache Airflow DAG development with TaskFlow API, Google Cloud operators (BigQuery, GCS), dbt integration, and dynamic DAG generation. Use when creating or modifying Airflow DAGs, implementing data pipeline orchestration, setting up cross-DAG dependencies with ExternalTaskSensor, adding deferrable operators, or configuring error handling and retries.
 ---
 
 # Airflow DAG Development Skill
 
-This skill guides Copilot to write Airflow DAGs following best practices for recommendation systems.
-
-## When to Use
-- Create new or modify existing Airflow DAGs
-- Write tasks for data pipelines
-- Configure scheduling and dependencies
+Write Airflow DAGs following best practices for recommendation systems.
 
 ## DAG Template
 
@@ -424,139 +419,218 @@ def dynamic_pipeline():
 dag_instance = dynamic_pipeline()
 ```
 
-## Cost Optimization for GCP
+## dbt Integration Patterns
 
-### Cost-Aware BigQuery Operator
+### DbtCloudRunJobOperator
+
+```python
+from airflow.providers.dbt.cloud.operators.dbt import DbtCloudRunJobOperator
+
+run_dbt_job = DbtCloudRunJobOperator(
+    task_id="run_dbt_transformation",
+    job_id="{{ var.value.dbt_job_id }}",
+    check_interval=60,
+    timeout=3600,
+    deferrable=True,  # Use triggerer for efficiency
+)
+```
+
+### dbt Core with BashOperator
+
+```python
+from airflow.operators.bash import BashOperator
+
+dbt_run = BashOperator(
+    task_id="dbt_run",
+    bash_command="""
+    cd /path/to/dbt/project &&
+    dbt run --models {{ params.models }} --target prod
+    """,
+    params={"models": "user_features product_features"},
+    env={
+        "DBT_PROFILES_DIR": "/path/to/profiles",
+        "GCP_PROJECT": "{{ var.value.gcp_project }}",
+    },
+)
+
+dbt_test = BashOperator(
+    task_id="dbt_test",
+    bash_command="cd /path/to/dbt/project && dbt test --target prod",
+)
+
+dbt_run >> dbt_test
+```
+
+### Incremental dbt Models in Airflow
+
+```python
+from airflow.decorators import dag, task
+from datetime import datetime
+
+@dag(
+    dag_id="dbt_incremental_pipeline",
+    schedule="0 * * * *",  # Hourly
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+)
+def dbt_incremental():
+    """Run dbt incremental models hourly."""
+
+    @task
+    def check_source_freshness():
+        """Check source data freshness before dbt run."""
+        import subprocess
+        result = subprocess.run(
+            ["dbt", "source", "freshness"],
+            cwd="/path/to/dbt/project",
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise Exception(f"Source freshness check failed: {result.stderr}")
+
+    run_dbt = BashOperator(
+        task_id="dbt_run_incremental",
+        bash_command="""
+        cd /path/to/dbt/project &&
+        dbt run --select state:modified+ --defer --state prod-run-artifacts/
+        """,
+    )
+
+    check_source_freshness() >> run_dbt
+
+dag_instance = dbt_incremental()
+```
+
+## Data Lineage Tracking
+
+### OpenLineage Integration
+
+```python
+from airflow import DAG
+from airflow.providers.openlineage.plugins.adapter import OpenLineageAdapter
+from airflow.decorators import task
+
+# OpenLineage is automatically enabled in Airflow 2.7+
+# Configure via environment variables:
+# OPENLINEAGE_URL=http://marquez:5000
+# OPENLINEAGE_NAMESPACE=recommendation_pipeline
+
+@dag(dag_id="lineage_tracked_pipeline")
+def pipeline_with_lineage():
+    """Pipeline with automatic lineage tracking."""
+
+    @task
+    def extract_data(**context):
+        """Extract data - lineage tracked automatically."""
+        from google.cloud import bigquery
+
+        client = bigquery.Client()
+        query = """
+        SELECT * FROM `project.raw.user_events`
+        WHERE DATE(event_timestamp) = CURRENT_DATE()
+        """
+        # OpenLineage captures: source table, query, destination
+        df = client.query(query).to_dataframe()
+        return df.to_json()
+
+    extract_data()
+```
+
+### Custom Lineage Metadata
+
+```python
+from airflow.lineage.entities import File, Table
+from airflow.operators.bash import BashOperator
+
+# Add lineage metadata to tasks
+process_data = BashOperator(
+    task_id="process_data",
+    bash_command="python process.py",
+    inlets=[
+        Table(
+            database="bigquery",
+            cluster="gcp-project",
+            name="raw.user_events",
+        )
+    ],
+    outlets=[
+        Table(
+            database="bigquery",
+            cluster="gcp-project",
+            name="features.user_features",
+        )
+    ],
+)
+```
+
+## Dynamic DAG Generation
+
+For advanced dynamic DAG patterns (YAML-based factories, database-driven generation, Jinja2 templates), see [reference/dynamic-dags.md](reference/dynamic-dags.md).
+
+### Quick Example - Generate DAGs from Config
+
+```python
+import yaml
+from pathlib import Path
+from airflow import DAG
+from datetime import datetime
+
+config_dir = Path(__file__).parent / "configs"
+
+for config_file in config_dir.glob("*.yaml"):
+    with open(config_file) as f:
+        config = yaml.safe_load(f)
+        # Create DAG from config
+        dag = DAG(
+            dag_id=config["dag_id"],
+            schedule=config["schedule"],
+            start_date=datetime.fromisoformat(config["start_date"]),
+            catchup=False,
+        )
+        globals()[config["dag_id"]] = dag
+```
+
+## Cost Optimization
+
+For detailed cost optimization patterns (cost-aware operators, query caching, cost tracking), see [reference/cost-tracking.md](reference/cost-tracking.md).
+
+### Quick Cost Control Example
 ```python
 from airflow.decorators import task
-from airflow.exceptions import AirflowException
 from google.cloud import bigquery
 
 @task
 def cost_controlled_query(sql: str, max_cost_usd: float = 10.0, **context):
     """Execute BigQuery query with cost control."""
-
     client = bigquery.Client()
 
     # Dry run to estimate cost
     job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=True)
     dry_run_job = client.query(sql, job_config=job_config)
 
-    bytes_processed = dry_run_job.total_bytes_processed
-    estimated_cost = (bytes_processed / 1e12) * 5  # $5 per TB
-
-    context["task_instance"].xcom_push(
-        key="estimated_cost",
-        value=estimated_cost
-    )
-
+    estimated_cost = (dry_run_job.total_bytes_processed / 1e12) * 5
     if estimated_cost > max_cost_usd:
-        raise AirflowException(
-            f"Query too expensive: ${estimated_cost:.2f} exceeds ${max_cost_usd} limit"
-        )
+        raise AirflowException(f"Query too expensive: ${estimated_cost:.2f}")
 
-    # Execute actual query
-    job_config = bigquery.QueryJobConfig(use_query_cache=True)
-    query_job = client.query(sql, job_config=job_config)
-    results = list(query_job.result())
-
-    # Log actual cost
-    actual_bytes = query_job.total_bytes_processed
-    actual_cost = (actual_bytes / 1e12) * 5
-
-    context["task_instance"].log.info(
-        f"Query cost: ${actual_cost:.4f} (processed {actual_bytes / 1e9:.2f} GB)"
-    )
-
-    return results
+    return list(client.query(sql).result())
 ```
 
-### Query Result Caching
-```python
-from google.cloud import bigquery
+## Troubleshooting
 
-@task
-def cached_query(**context):
-    """Execute query with result caching."""
-
-    client = bigquery.Client()
-
-    job_config = bigquery.QueryJobConfig(
-        use_query_cache=True,  # Use cached results if available
-        use_legacy_sql=False,
-    )
-
-    query = """
-    SELECT user_id, COUNT(*) as events
-    FROM `project.raw.user_events`
-    WHERE DATE(event_timestamp) = CURRENT_DATE()
-    GROUP BY user_id
-    """
-
-    query_job = client.query(query, job_config=job_config)
-
-    # Check if results came from cache
-    if query_job.cache_hit:
-        context["task_instance"].log.info("Results retrieved from cache (no cost)")
-    else:
-        bytes_billed = query_job.total_bytes_billed
-        cost = (bytes_billed / 1e12) * 5
-        context["task_instance"].log.info(f"Query cost: ${cost:.4f}")
-
-    return list(query_job.result())
-```
-
-### Cost Tracking
-```python
-from airflow.decorators import task
-from google.cloud import bigquery
-from datetime import datetime
-
-@task
-def track_dag_costs(dag_id: str, **context):
-    """Track BigQuery costs for this DAG run."""
-
-    client = bigquery.Client()
-
-    # Query job history for this DAG run
-    query = f"""
-    SELECT
-        job_id,
-        user_email,
-        total_bytes_billed,
-        (total_bytes_billed / POW(10, 12)) * 5 as cost_usd,
-        creation_time
-    FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-    WHERE DATE(creation_time) = '{context['ds']}'
-        AND state = 'DONE'
-        AND job_type = 'QUERY'
-        AND user_email = '{client.get_service_account_email()}'
-    ORDER BY creation_time DESC
-    """
-
-    results = list(client.query(query).result())
-    total_cost = sum(row.cost_usd for row in results)
-
-    # Store cost metric
-    context["task_instance"].xcom_push(key="dag_cost_usd", value=total_cost)
-    context["task_instance"].log.info(
-        f"Total BigQuery cost for {dag_id}: ${total_cost:.2f}"
-    )
-
-    return total_cost
-```
+For detailed troubleshooting guides (DAG import failures, XCom limits, debugging, memory issues), see [reference/troubleshooting.md](reference/troubleshooting.md).
 
 ## Coding Conventions
+
 - Task IDs: `{verb}_{noun}` (e.g., `extract_user_events`)
 - DAG IDs: `{domain}_{action}_{frequency}` (e.g., `recommendation_train_daily`)
 - Use Jinja templating for dynamic values
 - Always set `execution_timeout` to prevent hanging tasks
 - Document DAG purpose in docstring
-- Use structured logging with context for Cloud Logging
-- Implement smart retry logic based on error types
-- Set SLAs for critical tasks
-- Use resource pools to prevent quota exhaustion
-- Estimate and track BigQuery costs
-- Use GCS for large data instead of XCom
-- Implement cross-DAG dependencies with ExternalTaskSensor
 - Use deferrable operators for long-running tasks
+
+## Advanced Topics
+
+For detailed guidance on specialized patterns:
+
+- **Cost Optimization**: See [reference/cost-tracking.md](reference/cost-tracking.md) for cost-aware operators and query caching
+- **Troubleshooting**: See [reference/troubleshooting.md](reference/troubleshooting.md) for DAG import failures, XCom limits, and debugging

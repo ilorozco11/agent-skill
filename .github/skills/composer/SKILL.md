@@ -1,17 +1,11 @@
 ---
-name: GCP Composer Deployment
-description: Support for configuring and deploying Google Cloud Composer 2 environments
+name: composer
+description: GCP Composer 2 deployment and operations with Terraform configuration. Use when creating Composer environments, configuring worker/scheduler/triggerer resources, setting up Airflow connections and variables, implementing monitoring dashboards, troubleshooting worker crashes or scheduler lag, performing version upgrades, or implementing disaster recovery.
 ---
 
 # GCP Composer Deployment Skill
 
-This skill guides Copilot to configure and manage GCP Composer environments.
-
-## When to Use
-- Create or configure Composer environments
-- Setup Airflow connections and variables
-- Configure auto-scaling
-- Troubleshoot Composer issues
+Configure and manage GCP Composer environments following best practices.
 
 ## Terraform Configuration
 
@@ -651,6 +645,7 @@ resource "google_cloudbuild_trigger" "dag_replication" {
 ```
 
 ## Best Practices
+
 - Use Composer 2 for better autoscaling and resource management
 - Enable private IP for security
 - Use triggerer for deferrable operators
@@ -659,11 +654,5 @@ resource "google_cloudbuild_trigger" "dag_replication" {
 - Monitor environment health with Cloud Monitoring
 - Implement automated backups of DAGs, variables, and connections
 - Use Workload Identity instead of service account keys
-- Right-size workloads based on actual usage patterns
-- Use preemptible nodes for non-critical workloads
 - Test upgrades in staging before production
 - Maintain disaster recovery plan with cross-region standby
-- Clear stuck tasks regularly to prevent database bloat
-- Monitor scheduler heartbeat and performance metrics
-- Use blue-green deployments for zero-downtime upgrades
-- Track costs per environment and optimize continuously

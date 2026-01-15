@@ -1,17 +1,11 @@
 ---
-name: BigQuery Development
-description: Support for writing BigQuery queries, feature engineering and ML models for recommendation systems
+name: bigquery
+description: BigQuery query optimization, feature engineering, and BigQuery ML models for recommendation systems. Use when writing optimized SQL queries, implementing partitioning/clustering, creating materialized views, engineering user/product/interaction features, handling schema evolution, setting up streaming with Storage Write API, or building Matrix Factorization models.
 ---
 
 # BigQuery Development Skill
 
-This skill guides Copilot to write optimized BigQuery queries for recommendation systems.
-
-## When to Use
-- Write SQL queries for BigQuery
-- Feature engineering for ML models
-- Create BigQuery ML models
-- Optimize query performance
+Write optimized BigQuery queries for recommendation systems following best practices.
 
 ## Query Optimization
 
@@ -289,7 +283,213 @@ GROUP BY query_date;
 -- bq update --daily_bytes_billed_limit=107374182400 project:dataset
 ```
 
+## Schema Evolution Patterns
+
+### Adding Columns Safely
+
+```sql
+-- Add new column with default value
+ALTER TABLE `project.recommendation.user_features`
+ADD COLUMN IF NOT EXISTS preferred_payment_method STRING DEFAULT 'credit_card';
+
+-- Add nullable column (backward compatible)
+ALTER TABLE `project.recommendation.user_features`
+ADD COLUMN IF NOT EXISTS loyalty_tier STRING;
+
+-- Add required column with default for existing rows
+ALTER TABLE `project.recommendation.user_features`
+ADD COLUMN IF NOT EXISTS account_status STRING DEFAULT 'active'
+OPTIONS(description='User account status: active, suspended, closed');
+```
+
+### Schema Migration Strategy
+
+```sql
+-- 1. Create new table with updated schema
+CREATE TABLE `project.recommendation.user_features_v2`
+PARTITION BY DATE(created_at)
+CLUSTER BY user_id, account_type
+AS
+SELECT
+  user_id,
+  total_events,
+  total_spent,
+  -- New columns with transformations
+  CASE
+    WHEN total_spent > 10000 THEN 'premium'
+    WHEN total_spent > 1000 THEN 'standard'
+    ELSE 'basic'
+  END as account_type,
+  created_at
+FROM `project.recommendation.user_features`;
+
+-- 2. Verify data quality in new table
+SELECT
+  COUNT(*) as total_rows,
+  COUNT(DISTINCT user_id) as unique_users,
+  COUNTIF(account_type IS NULL) as null_account_types
+FROM `project.recommendation.user_features_v2`;
+
+-- 3. Swap tables (atomic operation)
+DROP TABLE `project.recommendation.user_features`;
+CREATE TABLE `project.recommendation.user_features`
+CLONE `project.recommendation.user_features_v2`;
+DROP TABLE `project.recommendation.user_features_v2`;
+```
+
+### Handling Breaking Changes
+
+```sql
+-- For breaking changes, use views for backward compatibility
+CREATE OR REPLACE VIEW `project.recommendation.user_features_legacy` AS
+SELECT
+  user_id,
+  total_events,
+  total_spent,
+  -- Map new schema to old column names
+  CASE account_type
+    WHEN 'premium' THEN 3
+    WHEN 'standard' THEN 2
+    ELSE 1
+  END as user_tier  -- Old column name
+FROM `project.recommendation.user_features`;
+```
+
+## Streaming Insert Patterns
+
+### BigQuery Storage Write API
+
+```python
+from google.cloud import bigquery_storage_v1
+from google.cloud.bigquery_storage_v1 import types, writer
+import json
+
+def stream_to_bigquery(project_id: str, dataset_id: str, table_id: str, rows: list):
+    """Stream data to BigQuery using Storage Write API."""
+
+    write_client = bigquery_storage_v1.BigQueryWriteClient()
+
+    # Get table schema
+    parent = write_client.table_path(project_id, dataset_id, table_id)
+    write_stream = types.WriteStream()
+    write_stream.type_ = types.WriteStream.Type.COMMITTED
+
+    write_stream = write_client.create_write_stream(
+        parent=parent, write_stream=write_stream
+    )
+    stream_name = write_stream.name
+
+    # Create append rows stream
+    request_template = types.AppendRowsRequest()
+    request_template.write_stream = stream_name
+
+    # Convert rows to protocol buffer format
+    proto_rows = types.ProtoRows()
+    for row in rows:
+        proto_rows.serialized_rows.append(
+            json.dumps(row).encode("utf-8")
+        )
+
+    request = types.AppendRowsRequest()
+    request.write_stream = stream_name
+    proto_data = types.AppendRowsRequest.ProtoData()
+    proto_data.rows = proto_rows
+    request.proto_rows = proto_data
+
+    # Append rows
+    response = write_client.append_rows([request])
+
+    # Handle response
+    for result in response:
+        if result.error.code != 0:
+            raise Exception(f"Error: {result.error.message}")
+
+    # Finalize stream for exactly-once semantics
+    write_client.finalize_write_stream(name=stream_name)
+```
+
+### Handling Streaming Errors
+
+```python
+from google.api_core import retry
+from google.cloud import bigquery
+
+@retry.Retry(predicate=retry.if_exception_type(Exception))
+def stream_with_retry(client: bigquery.Client, table_id: str, rows: list):
+    """Stream rows with automatic retry on transient errors."""
+
+    errors = client.insert_rows_json(table_id, rows)
+
+    if errors:
+        # Log errors and retry
+        for error in errors:
+            print(f"Error inserting row: {error}")
+        raise Exception(f"Failed to insert {len(errors)} rows")
+
+    return True
+```
+
+## Cross-Project Queries
+
+### Authorized Views Pattern
+
+```sql
+-- Create authorized view in project A to access data in project B
+CREATE OR REPLACE VIEW `project-a.analytics.user_features_view` AS
+SELECT
+  user_id,
+  total_events,
+  total_spent,
+  created_at
+FROM `project-b.recommendation.user_features`
+WHERE DATE(created_at) >= CURRENT_DATE() - 30;
+
+-- Grant access to the view (run in project B)
+-- GRANT `roles/bigquery.dataViewer` ON TABLE `project-b.recommendation.user_features`
+-- TO "serviceAccount:project-a-analytics@project-a.iam.gserviceaccount.com";
+```
+
+### Cross-Region Data Access
+
+```sql
+-- Query data from different regions with EXTERNAL_QUERY
+SELECT
+  us_data.user_id,
+  us_data.total_spent as us_spent,
+  eu_data.total_spent as eu_spent
+FROM `us-central1.recommendation.user_features` us_data
+FULL OUTER JOIN `europe-west1.recommendation.user_features` eu_data
+  USING (user_id);
+
+-- For better performance, use materialized results
+CREATE MATERIALIZED VIEW `project.global.user_features_combined` AS
+SELECT
+  COALESCE(us.user_id, eu.user_id) as user_id,
+  COALESCE(us.total_spent, 0) + COALESCE(eu.total_spent, 0) as global_total_spent
+FROM `us-central1.recommendation.user_features` us
+FULL OUTER JOIN `europe-west1.recommendation.user_features` eu
+  ON us.user_id = eu.user_id;
+```
+
+### Cost Attribution for Cross-Project Queries
+
+```sql
+-- Track costs by querying project
+SELECT
+  project_id,
+  user_email,
+  SUM(total_bytes_billed) / POW(10, 12) as total_tb_billed,
+  SUM(total_bytes_billed) / POW(10, 12) * 5 as estimated_cost_usd
+FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE DATE(creation_time) >= CURRENT_DATE() - 30
+  AND job_type = 'QUERY'
+GROUP BY project_id, user_email
+ORDER BY estimated_cost_usd DESC;
+```
+
 ## Advanced Time-Series Features
+
+For detailed time-series feature engineering patterns (lag features, rolling windows, seasonality encoding), see [reference/time-series.md](reference/time-series.md).
 
 ### Lag and Rolling Windows
 ```sql
@@ -590,17 +790,18 @@ JOIN (
 ```
 
 ## Best Practices
+
 - Always partition tables by date for time-series data
 - Use clustering on frequently filtered columns (user_id, product_id)
 - Avoid self-joins - use window functions instead
 - Use SAFE_DIVIDE to handle division by zero
 - Cache expensive queries with materialized views
 - Use approximate aggregations (APPROX_COUNT_DISTINCT) for large datasets
-- Analyze query performance with INFORMATION_SCHEMA
 - Set up cost monitoring and budget alerts
-- Implement comprehensive data quality checks
-- Use ML.EXPLAIN_PREDICT for model interpretability
-- Leverage incremental training for large models
-- Use cyclical encoding for seasonal features
-- Monitor and optimize slow queries regularly
 - Handle data skew with approximate methods or filtering
+
+## Advanced Topics
+
+For detailed guidance on specialized patterns:
+
+- **Time-Series Features**: See [reference/time-series.md](reference/time-series.md) for lag windows, seasonality encoding, and trend detection

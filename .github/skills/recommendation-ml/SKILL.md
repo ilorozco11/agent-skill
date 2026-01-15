@@ -1,17 +1,11 @@
 ---
-name: Recommendation ML Development
-description: Support for building recommendation models for e-commerce with BigQuery ML
+name: recommendation-ml
+description: ML recommendation system development with collaborative filtering (Matrix Factorization), content-based filtering, and hybrid approaches. Use when building recommendation models, implementing Feast feature stores, setting up MLflow model registry, handling cold-start problems for new users/products, implementing diversity with MMR algorithm, or adding exploration with Thompson Sampling/epsilon-greedy bandits.
 ---
 
 # Recommendation ML Development Skill
 
-This skill guides Copilot to build recommendation systems for e-commerce.
-
-## When to Use
-- Design recommendation architecture
-- Feature engineering for user/product/interaction
-- Build ML models with BigQuery ML
-- Evaluate and deploy models
+Build recommendation systems for e-commerce following ML best practices.
 
 ## Recommendation System Architecture
 
@@ -161,6 +155,242 @@ FULL OUTER JOIN content_recs ct
 WHERE COALESCE(c.collab_score, 0) * 0.6 + COALESCE(ct.content_score, 0) * 0.4 > 0.1
 ```
 
+## Feature Store Integration
+
+### Feast Setup for Recommendation Features
+
+```python
+# feature_repo/features.py
+from feast import Entity, Feature, FeatureView, FileSource, ValueType
+from datetime import timedelta
+
+# Define entities
+user = Entity(name="user_id", value_type=ValueType.STRING, description="User ID")
+product = Entity(name="product_id", value_type=ValueType.STRING, description="Product ID")
+
+# User features from BigQuery
+user_features_source = FileSource(
+    path="gs://recommendation-features/user_features.parquet",
+    event_timestamp_column="event_timestamp",
+)
+
+user_features = FeatureView(
+    name="user_features",
+    entities=["user_id"],
+    ttl=timedelta(days=90),
+    features=[
+        Feature(name="total_events", dtype=ValueType.INT64),
+        Feature(name="total_spent", dtype=ValueType.FLOAT),
+        Feature(name="days_since_last_visit", dtype=ValueType.INT64),
+        Feature(name="preferred_categories", dtype=ValueType.STRING_LIST),
+    ],
+    batch_source=user_features_source,
+)
+
+# Product features
+product_features = FeatureView(
+    name="product_features",
+    entities=["product_id"],
+    ttl=timedelta(days=30),
+    features=[
+        Feature(name="popularity_score", dtype=ValueType.FLOAT),
+        Feature(name="conversion_rate", dtype=ValueType.FLOAT),
+        Feature(name="avg_rating", dtype=ValueType.FLOAT),
+    ],
+    batch_source=FileSource(
+        path="gs://recommendation-features/product_features.parquet",
+        event_timestamp_column="event_timestamp",
+    ),
+)
+```
+
+### Online Feature Serving
+
+```python
+from feast import FeatureStore
+from datetime import datetime
+
+def get_features_for_inference(user_ids: list, product_ids: list) -> dict:
+    """Fetch features for real-time recommendation serving."""
+
+    store = FeatureStore(repo_path="feature_repo/")
+
+    # Create entity rows for online retrieval
+    entity_rows = [
+        {
+            "user_id": user_id,
+            "product_id": product_id,
+            "event_timestamp": datetime.now(),
+        }
+        for user_id, product_id in zip(user_ids, product_ids)
+    ]
+
+    # Get online features
+    features = store.get_online_features(
+        features=[
+            "user_features:total_events",
+            "user_features:total_spent",
+            "product_features:popularity_score",
+            "product_features:conversion_rate",
+        ],
+        entity_rows=entity_rows,
+    ).to_dict()
+
+    return features
+```
+
+### Point-in-Time Correctness for Training
+
+```python
+from feast import FeatureStore
+import pandas as pd
+
+def get_training_features(entity_df: pd.DataFrame) -> pd.DataFrame:
+    """Get historical features with point-in-time correctness."""
+
+    store = FeatureStore(repo_path="feature_repo/")
+
+    # entity_df must have: user_id, product_id, event_timestamp
+    training_df = store.get_historical_features(
+        entity_df=entity_df,
+        features=[
+            "user_features:total_events",
+            "user_features:total_spent",
+            "user_features:days_since_last_visit",
+            "product_features:popularity_score",
+            "product_features:conversion_rate",
+        ],
+    ).to_df()
+
+    return training_df
+```
+
+## Model Registry with MLflow
+
+### Model Versioning and Tracking
+
+```python
+import mlflow
+import mlflow.sklearn
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# Start MLflow run
+with mlflow.start_run(run_name="matrix_factorization_v1"):
+
+    # Log parameters
+    mlflow.log_param("num_factors", 50)
+    mlflow.log_param("learning_rate", 0.01)
+    mlflow.log_param("regularization", 0.1)
+    mlflow.log_param("iterations", 20)
+
+    # Train model (example with implicit library)
+    from implicit.als import AlternatingLeastSquares
+
+    model = AlternatingLeastSquares(
+        factors=50,
+        regularization=0.1,
+        iterations=20,
+    )
+    model.fit(user_item_matrix)
+
+    # Evaluate model
+    predictions = model.recommend(user_ids, user_item_matrix, N=10)
+    mae = calculate_mae(predictions, actual_interactions)
+    rmse = calculate_rmse(predictions, actual_interactions)
+
+    # Log metrics
+    mlflow.log_metric("mae", mae)
+    mlflow.log_metric("rmse", rmse)
+    mlflow.log_metric("coverage", calculate_coverage(predictions))
+
+    # Log model
+    mlflow.sklearn.log_model(model, "recommendation_model")
+
+    # Tag model
+    mlflow.set_tag("model_type", "collaborative_filtering")
+    mlflow.set_tag("algorithm", "matrix_factorization")
+```
+
+### Champion/Challenger Deployment
+
+```python
+import mlflow
+from mlflow.tracking import MlflowClient
+
+client = MlflowClient()
+
+def promote_to_production(run_id: str, model_name: str):
+    """Promote model to production after validation."""
+
+    # Register model
+    model_uri = f"runs:/{run_id}/recommendation_model"
+    model_details = mlflow.register_model(model_uri, model_name)
+
+    # Transition to staging first
+    client.transition_model_version_stage(
+        name=model_name,
+        version=model_details.version,
+        stage="Staging",
+    )
+
+    # Run validation tests on staging
+    if validate_staging_model(model_name, model_details.version):
+        # Promote to production
+        client.transition_model_version_stage(
+            name=model_name,
+            version=model_details.version,
+            stage="Production",
+        )
+        print(f"Model version {model_details.version} promoted to production")
+    else:
+        print("Validation failed, model not promoted")
+
+def get_production_model(model_name: str):
+    """Get the current production model."""
+
+    model_version = client.get_latest_versions(
+        name=model_name,
+        stages=["Production"]
+    )[0]
+
+    model = mlflow.pyfunc.load_model(
+        model_uri=f"models:/{model_name}/{model_version.version}"
+    )
+
+    return model, model_version.version
+```
+
+### Model Comparison
+
+```python
+import mlflow
+from mlflow.tracking import MlflowClient
+
+def compare_models(experiment_name: str, metric: str = "mae") -> pd.DataFrame:
+    """Compare all models in an experiment by metric."""
+
+    client = MlflowClient()
+    experiment = client.get_experiment_by_name(experiment_name)
+
+    runs = client.search_runs(
+        experiment_ids=[experiment.experiment_id],
+        order_by=[f"metrics.{metric} ASC"],
+    )
+
+    results = []
+    for run in runs:
+        results.append({
+            "run_id": run.info.run_id,
+            "model_type": run.data.tags.get("model_type"),
+            "mae": run.data.metrics.get("mae"),
+            "rmse": run.data.metrics.get("rmse"),
+            "coverage": run.data.metrics.get("coverage"),
+            "start_time": run.info.start_time,
+        })
+
+    return pd.DataFrame(results)
+```
+
 ## Model Evaluation
 
 ### Offline Metrics
@@ -272,7 +502,10 @@ def get_recommendations(
 
 ## Cold Start Problem Solutions
 
-### New User Recommendations
+For comprehensive cold start strategies (new users, new products, popularity baselines, user segmentation), see [reference/cold-start.md](reference/cold-start.md).
+
+### Quick Example - New User Recommendations
+
 ```sql
 -- Handle users with <5 interactions using popularity baseline
 CREATE OR REPLACE TABLE `project.recommendation.cold_start_new_users` AS
@@ -283,103 +516,27 @@ WITH new_users AS (
   HAVING COUNT(*) < 5
 ),
 popular_products AS (
-  -- Global popularity baseline
   SELECT
     product_id,
     COUNT(DISTINCT user_id) as unique_viewers,
-    COUNTIF(event_type = 'purchase') as purchase_count,
-    COUNTIF(event_type = 'purchase') / NULLIF(COUNTIF(event_type = 'view'), 0) as conversion_rate
+    COUNTIF(event_type = 'purchase') as purchase_count
   FROM `project.raw.user_events`
   WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
   GROUP BY product_id
   HAVING unique_viewers > 100
-),
-trending_products AS (
-  -- Velocity-based trending items
-  SELECT
-    product_id,
-    COUNT(*) as recent_interactions,
-    COUNT(*) / NULLIF(
-      LAG(COUNT(*)) OVER (PARTITION BY product_id ORDER BY DATE(event_timestamp)),
-      0
-    ) as trend_score
-  FROM `project.raw.user_events`
-  WHERE event_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 DAY)
-  GROUP BY product_id, DATE(event_timestamp)
 )
 SELECT
   nu.user_id,
   pp.product_id,
-  -- Weighted score: 50% popularity, 30% trending, 20% conversion
-  (pp.purchase_count * 0.5 +
-   COALESCE(tp.trend_score, 1) * 0.3 +
-   pp.conversion_rate * 0.2) as recommendation_score,
-  'cold_start_popularity' as recommendation_reason
+  pp.purchase_count as recommendation_score
 FROM new_users nu
 CROSS JOIN popular_products pp
-LEFT JOIN trending_products tp USING (product_id)
-QUALIFY ROW_NUMBER() OVER (PARTITION BY nu.user_id ORDER BY recommendation_score DESC) <= 20;
-```
-
-### Cold Start Handler (Python)
-```python
-# src/recommendation/cold_start.py
-from enum import Enum
-from typing import List, Dict, Optional
-from google.cloud import bigquery
-
-class UserSegment(Enum):
-    NEW_USER = "new_user"  # <5 interactions
-    CASUAL_USER = "casual_user"  # 5-20 interactions
-    ACTIVE_USER = "active_user"  # >20 interactions
-
-class ColdStartRecommender:
-    """Handle recommendations for new users and products."""
-
-    def __init__(self, bq_client: bigquery.Client):
-        self.bq_client = bq_client
-
-    def classify_user(self, user_id: str) -> UserSegment:
-        """Classify user based on interaction history."""
-        query = f"""
-        SELECT COUNT(*) as interaction_count
-        FROM `project.raw.user_events`
-        WHERE user_id = '{user_id}'
-        """
-        result = list(self.bq_client.query(query).result())[0]
-        count = result.interaction_count
-
-        if count < 5:
-            return UserSegment.NEW_USER
-        elif count < 20:
-            return UserSegment.CASUAL_USER
-        else:
-            return UserSegment.ACTIVE_USER
-
-    def get_recommendations(
-        self,
-        user_id: str,
-        n_items: int = 10,
-        user_attributes: Optional[Dict] = None
-    ) -> List[Dict]:
-        """Get recommendations based on user segment."""
-
-        segment = self.classify_user(user_id)
-
-        if segment == UserSegment.NEW_USER:
-            # Use popularity + user attributes
-            return self._get_popularity_based(n_items, user_attributes)
-        elif segment == UserSegment.CASUAL_USER:
-            # Hybrid: 70% collaborative, 30% popular
-            collab_recs = self._get_collaborative(user_id, int(n_items * 0.7))
-            popular_recs = self._get_popularity_based(int(n_items * 0.3), user_attributes)
-            return collab_recs + popular_recs
-        else:
-            # Full collaborative filtering
-            return self._get_collaborative(user_id, n_items)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY nu.user_id ORDER BY recommendation_score DESC) <= 10;
 ```
 
 ## Recommendation Diversity & Fairness
+
+For comprehensive diversity patterns (MMR algorithm, fairness metrics, diversity optimization), see [reference/fairness.md](reference/fairness.md).
 
 ### Diversity-Aware Recommendations (MMR)
 ```sql
@@ -763,6 +920,7 @@ ORDER BY dr.metric_date DESC;
 ```
 
 ## Best Practices
+
 - Use implicit feedback (clicks, purchases) over explicit ratings
 - Filter out noise (minimum interaction threshold)
 - Retrain models regularly (weekly/daily)
@@ -770,14 +928,12 @@ ORDER BY dr.metric_date DESC;
 - Include diversity in recommendations
 - A/B test before full rollout
 - Track business metrics (CTR, conversion, revenue)
-- Handle cold start with popularity and trending items
-- Use MMR for diverse recommendations
-- Monitor fairness across categories
-- Provide explainable recommendations to users
-- Implement Thompson Sampling for exploration
-- Track real-time context for personalization
-- Monitor catalog coverage and diversity
-- Use session-based features for real-time recommendations
-- Implement multi-armed bandits for strategy selection
-- Measure both offline (MAE, RMSE) and online (CTR, conversion) metrics
 - Balance relevance and diversity (50-70% relevance weight)
+
+## Advanced Topics
+
+For detailed guidance on specialized patterns:
+
+- **Cold Start Problems**: See [reference/cold-start.md](reference/cold-start.md) for handling new users and products
+- **Fairness & Diversity**: See [reference/fairness.md](reference/fairness.md) for MMR algorithm and diversity metrics
+- **Exploration Strategies**: See [reference/bandit-algorithms.md](reference/bandit-algorithms.md) for Thompson Sampling, epsilon-greedy, and UCB
