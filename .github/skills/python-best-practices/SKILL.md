@@ -57,7 +57,7 @@ version = "0.1.0"
 requires-python = ">=3.11"
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.format]
