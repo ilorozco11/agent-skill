@@ -123,6 +123,8 @@ import json
 logger = logging.getLogger("service")
 logger.setLevel(logging.INFO)
 
+RESERVED_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -133,7 +135,7 @@ class JsonFormatter(logging.Formatter):
         extra = {
             key: value
             for key, value in record.__dict__.items()
-            if key not in {"args", "exc_info", "msg", "levelname", "levelno", "name"}
+            if key not in RESERVED_ATTRS
         }
         if extra:
             payload["extra"] = extra
