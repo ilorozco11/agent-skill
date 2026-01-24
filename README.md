@@ -18,6 +18,7 @@ Agent skills for GitHub Copilot to support development of recommendation systems
     ├── bigquery/SKILL.md                # Query & feature engineering
     ├── composer/SKILL.md                # GCP Composer deployment
     ├── jenkins-cicd/SKILL.md            # CI/CD pipelines
+    ├── python-best-practices/SKILL.md   # Modern Python standards
     ├── pytest-testing/SKILL.md          # Testing data pipelines
     └── recommendation-ml/SKILL.md       # ML model development
 ```
@@ -30,6 +31,7 @@ Agent skills for GitHub Copilot to support development of recommendation systems
 | **BigQuery** | Query optimization, feature engineering | Write SQL, create features for ML |
 | **Composer** | GCP Composer deployment | Setup/configure Composer |
 | **Jenkins CI/CD** | Pipeline templates | Create Jenkinsfile, CI/CD |
+| **Python Best Practices** | Modern Python tooling and conventions | Modernize Python services or libraries |
 | **Pytest Testing** | Testing patterns | Write tests for DAGs/queries |
 | **Recommendation ML** | ML model development | Build recommendation models |
 
