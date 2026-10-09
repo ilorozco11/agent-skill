@@ -95,3 +95,19 @@ and deploy to Composer staging/production.
 - GitHub Copilot Chat
 - Python
 - Google Cloud Code
+
+
+## AK Test — portable test quality and CI optimization
+
+[Skill](.github/skills/ak-test/SKILL.md) · [Install for Copilot, Claude Code, Codex, or other agents](.github/skills/ak-test/references/integration.md)
+
+| Mode | Purpose |
+| --- | --- |
+| `create` | Add only missing coverage for real behavior |
+| `audit` | Read-only evidence-based review of weak, redundant, skipped, or misleading tests |
+| `optimize` | Measure CI cost and latency, then safely select affected lanes |
+| `optimize --ultra` | Five independent proposals and a separate verifier, when supported |
+
+Use `Use ak-test audit` with Copilot, `/ak-test audit` with Claude Code, or `$ak-test audit` with Codex after installing into the appropriate skill folder. `/ak:test` is a conceptual alias, not a universally registered command.
+
+AK Test is stack-neutral. It requires investigation before changing failing tests, prohibits unauthorized skips, records evidence before removals, falls back to full coverage when impact is unknown, and requires full validation before stable release. It is an instruction package; actual enforcement requires the target project's CI gates. No performance savings are claimed before measurement.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AK Test"
+  short_description: "Behavior-driven tests and measured CI optimization"
+  default_prompt: "Use $ak-test to audit test quality and preserve regression protection."
